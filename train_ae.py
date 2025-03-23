@@ -214,7 +214,7 @@ class Block(nn.Module):
 @dataclass
 class GPTConfig:
     vocab_size : int = 50304
-    n_layer : int = 24
+    n_layer : int = 12
     n_head : int = 6 # head dim 128 suggested by @Grad62304977
     n_embd : int = 768
 
@@ -230,7 +230,8 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
-        self.d_head = nn.Linear(1, sequence_length, bias=False)
+        self.c_head = nn.Linear(768, 1, bias=False)
+        self.e_head = nn.Linear(1, 768, bias=False)
 
     def forward(self, idx, targets=None, return_logits=True):
 
@@ -240,10 +241,8 @@ class GPT(nn.Module):
         for block in self.transformer.h[:len(self.transformer.h) // 2]:
             x = block(x)
             
-        x = x.mean(dim=1, keepdim=True)
-        x = x.transpose(1, 2)
-        x = self.d_head(x)
-        x = x.transpose(1, 2)
+        x = self.c_head(x)
+        x = self.e_head(x)
         
         for block in self.transformer.h[len(self.transformer.h) // 2:]:
             x = block(x)
@@ -351,7 +350,7 @@ class Hyperparameters:
     input_bin : str = 'data/fineweb-tokmon-10B/english-50256-balanced-v2/fineweb-tokmon_train_*.bin' # input .bin to train on
     input_val_bin : str = 'data/fineweb-tokmon-10B/english-50256-balanced-v2/fineweb-tokmon_val_*.bin' # input .bin to eval validation loss on
     # optimization hyperparams
-    batch_size : int = 8*64 # batch size, in sequences, across all devices
+    batch_size : int = 8*32 # batch size, in sequences, across all devices
     device_batch_size : int = 16 # batch size, in sequences, per device
     sequence_length : int = 1024 # sequence length, in tokens
     num_iterations : int = 5100 # number of iterations to run
@@ -360,9 +359,9 @@ class Hyperparameters:
     warmdown_iters : int = 1450 # number of iterations of linear warmup/warmdown for triangular or trapezoidal schedule
     weight_decay : float = 0
     # evaluation and logging hyperparams
-    val_loss_every : int = 125 # every how many steps to evaluate val loss? 0 for only at the end
+    val_loss_every : int = 100 # every how many steps to evaluate val loss? 0 for only at the end
     val_tokens : int = 10485760 # how many tokens of validation data? it's important to keep this fixed for consistent comparisons
-    save_every : int = 100 # every how many steps to save the checkpoint? 0 for only at the end
+    save_every : int = 0 # every how many steps to save the checkpoint? 0 for only at the end
 args = Hyperparameters()
 
 # set up DDP (distributed data parallel). torchrun sets this env variable
@@ -396,7 +395,7 @@ x, y = train_loader.next_batch()
 # there are only 50257 unique GPT-2 tokens; we extend to nearest multiple of 128 for efficiency. suggested to me by @Grad62304977.
 # this originates from Karpathy's experiments.
 num_vocab = 50304
-model = GPT(GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=6, n_embd=768))
+model = GPT(GPTConfig(vocab_size=num_vocab, n_layer=24, n_head=6, n_embd=768))
 total_params = sum(p.numel() for p in model.parameters())
 print(f"Total number of parameters: {total_params}")
 model = model.cuda()
@@ -538,7 +537,7 @@ for step in range(args.num_iterations + 1):
     #dist.all_reduce(train_loss, op=dist.ReduceOp.AVG) # all-reducing the training loss would be more correct in terms of logging, but slower
     if master_process:
         approx_time = training_time_ms + 1000 * (time.time() - t0)
-        print(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} train_time:{approx_time:.0f}ms step_avg:{approx_time/timed_steps:.2f}ms")
+        # print(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} train_time:{approx_time:.0f}ms step_avg:{approx_time/timed_steps:.2f}ms")
         with open(logfile, "a") as f:
             f.write(f"step:{step+1}/{args.num_iterations} train_loss:{train_loss.item():.4f} train_time:{approx_time:.0f}ms step_avg:{approx_time/timed_steps:.2f}ms\n")
 
