@@ -177,7 +177,7 @@ class CausalSelfAttention(nn.Module):
         cos, sin = self.rotary(q)
         q, k = F.rms_norm(q, (q.size(-1),)), F.rms_norm(k, (k.size(-1),)) # QK norm suggested by @Grad62304977
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
-        y = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=True)
+        y = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=False)
         y = y.transpose(1, 2).contiguous().view_as(x) # re-assemble all head outputs side by side
         y = self.c_proj(y)
         return y
@@ -230,13 +230,24 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        self.d_head = nn.Linear(1, sequence_length, bias=False)
 
     def forward(self, idx, targets=None, return_logits=True):
 
         # forward the GPT model itself
         x = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        for block in self.transformer.h:
+
+        for block in self.transformer.h[:len(self.transformer.h) // 2]:
             x = block(x)
+            
+        x = x.mean(dim=1, keepdim=True)
+        x = x.transpose(1, 2)
+        x = self.d_head(x)
+        x = x.transpose(1, 2)
+        
+        for block in self.transformer.h[len(self.transformer.h) // 2:]:
+            x = block(x)
+            
         x = F.rms_norm(x, (x.size(-1),))
 
         if targets is not None:
@@ -324,7 +335,7 @@ class DistributedDataLoader:
         buf = self.tokens[self.current_position : self.current_position+B*T+1]
         buf = torch.tensor(buf.astype(np.int32), dtype=torch.long)
         x = (buf[:-1]).view(B, T) # inputs
-        y = (buf[1:]).view(B, T) # targets
+        y = (buf[:-1]).view(B, T) # targets same as inputs
         # advance current position and load next shard if necessary
         self.current_position += B * T * self.num_processes
         if self.current_position + (B * T * self.num_processes + 1) > len(self.tokens):
