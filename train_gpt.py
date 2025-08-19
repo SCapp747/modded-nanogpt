@@ -186,8 +186,8 @@ class MLP(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=False)
+        self.c_fc    = nn.Linear(config.n_embd, config.n_embd, bias=False)
+        self.c_proj  = nn.Linear(config.n_embd, config.n_embd, bias=False)
         self.c_proj.weight.data.zero_() # zero init suggested by @Grad62304977
 
     def forward(self, x):
@@ -215,8 +215,8 @@ class Block(nn.Module):
 class GPTConfig:
     vocab_size : int = 50304
     n_layer : int = 12
-    n_head : int = 6 # head dim 128 suggested by @Grad62304977
-    n_embd : int = 768
+    n_head : int = 12 # head dim 128 suggested by @Grad62304977
+    n_embd : int = 1536
 
 class GPT(nn.Module):
 
@@ -384,8 +384,9 @@ x, y = train_loader.next_batch()
 
 # there are only 50257 unique GPT-2 tokens; we extend to nearest multiple of 128 for efficiency. suggested to me by @Grad62304977.
 # this originates from Karpathy's experiments.
+#################### Following Line is very important 
 num_vocab = 50304
-model = GPT(GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=6, n_embd=768))
+model = GPT(GPTConfig(vocab_size=num_vocab, n_layer=12, n_head=12, n_embd=1536))
 total_params = sum(p.numel() for p in model.parameters())
 print(f"Total number of parameters: {total_params}")
 model = model.cuda()
