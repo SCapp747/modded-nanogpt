@@ -215,8 +215,8 @@ class Block(nn.Module):
 @dataclass
 class GPTConfig:
     vocab_size : int = 28416
-    n_layer : int = 36
-    n_head : int = 12
+    n_layer : int = 12
+    n_head : int = 6
     n_embd : int = 768
     embedding_dim: int = 128
 
@@ -360,15 +360,15 @@ class Hyperparameters:
     batch_size : int = 4*64 # batch size, in sequences, across all devices
     device_batch_size : int = 16 # batch size, in sequences, per device
     sequence_length : int = 1024 # sequence length, in tokens
-    num_iterations : int = 10000 # number of iterations to run
+    num_iterations : int = 100000 # number of iterations to run
     learning_rate : float = 0.0036
     warmup_iters : int = 0
-    warmdown_iters : int = 2000 # number of iterations of linear warmup/warmdown for triangular or trapezoidal schedule
+    warmdown_iters : int = 10000 # number of iterations of linear warmup/warmdown for triangular or trapezoidal schedule
     weight_decay : float = 0
     # evaluation and logging hyperparams
-    val_loss_every : int = 1000 # every how many steps to evaluate val loss? 0 for only at the end
+    val_loss_every : int = 500 # every how many steps to evaluate val loss? 0 for only at the end
     val_tokens : int = 10485760 # how many tokens of validation data? it's important to keep this fixed for consistent comparisons
-    save_every : int = 100 # every how many steps to save the checkpoint? 0 for only at the end
+    save_every : int = 500 # every how many steps to save the checkpoint? 0 for only at the end
 args = Hyperparameters()
 
 # set up DDP (distributed data parallel). torchrun sets this env variable
@@ -463,6 +463,7 @@ if master_process:
         f.write('='*100 + '\n')
 
 training_time_ms = 0
+rec_val_loss = 10
 # start the clock
 torch.cuda.synchronize()
 t0 = time.time()
@@ -485,7 +486,7 @@ for step in range(args.num_iterations + 1):
         training_time_ms += 1000 * (time.time() - t0)
         # run validation batches
         model.eval()
-        for depth in [6, 12, 18, 24, 30, 36]:
+        for depth in [12]:
             val_loader.reset()
             val_loss = 0.0
             for _ in range(val_steps):
@@ -506,15 +507,20 @@ for step in range(args.num_iterations + 1):
         t0 = time.time()
 
     if master_process and (last_step or (args.save_every > 0 and step % args.save_every == 0)):
-        # stop the clock
-        torch.cuda.synchronize()
-        training_time_ms += 1000 * (time.time() - t0)
-        # save the state of the training process
-        log = dict(step=step, code=code, model=raw_model.state_dict(), optimizers=[opt.state_dict() for opt in optimizers])
-        torch.save(log, 'logs/%s/state_step%06d.pt' % (run_id, step))
-        # start the clock again
-        torch.cuda.synchronize()
-        t0 = time.time()
+        if val_loss < rec_val_loss:
+            print("Validation Loss is: ", val_loss)
+            print("Previous Validation Loss was: ", rec_val_loss)
+            print("Saving...")
+            rec_val_loss = val_loss
+            # stop the clock
+            torch.cuda.synchronize()
+            training_time_ms += 1000 * (time.time() - t0)
+            # save the state of the training process
+            log = dict(step=step, code=code, model=raw_model.state_dict(), optimizers=[opt.state_dict() for opt in optimizers])
+            torch.save(log, 'logs/%s/state_step%06d.pt' % (run_id, step))
+            # start the clock again
+            torch.cuda.synchronize()
+            t0 = time.time()
 
     # bit confusing: we want to make sure to eval on 0th iteration
     # but also after the very last iteration. so we loop for step <= num_iterations
